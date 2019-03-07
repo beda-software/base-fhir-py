@@ -1,6 +1,7 @@
 import json
 import copy
 import pickle
+from abc import ABC, abstractmethod
 from os.path import dirname
 from collections import defaultdict
 
@@ -10,8 +11,8 @@ import requests
 from .utils import (
     encode_params, convert_values, get_by_path, parse_path, chunks)
 from .exceptions import (
-    FHIRResourceNotFound, FHIROperationOutcome, FHIRNotSupportedVersionError,
-    FHIRInvalidResponse)
+    ResourceNotFound, OperationOutcome, NotSupportedVersionError,
+    InvalidResponse)
 
 
 def load_schema(version):
@@ -21,10 +22,10 @@ def load_schema(version):
         with open(filename, 'rb') as f:
             return pickle.load(f)
     except FileNotFoundError:
-        raise FHIRNotSupportedVersionError()
+        raise NotSupportedVersionError()
 
 
-class FHIRClient:
+class Client(ABC):
     schema = None
     resources_cache = None
     url = None
@@ -37,13 +38,29 @@ class FHIRClient:
         self.authorization = authorization
         self.resources_cache = defaultdict(dict)
         self.without_cache = without_cache
-        self.schema = load_schema(fhir_version)
+        if fhir_version:
+            self.schema = load_schema(fhir_version)
 
     def __str__(self):  # pragma: no cover
-        return '<FHIRClient {0}>'.format(self.url)
+        return '<{0} {1}>'.format(self.__class__.__name__, self.url)
 
     def __repr__(self):  # pragma: no cover
         return self.__str__()
+
+    @property
+    @abstractmethod
+    def searchset_class(self):
+        pass
+
+    @property
+    @abstractmethod
+    def resource_class(self):
+        pass
+
+    @property
+    @abstractmethod
+    def reference_class(self):
+        pass
 
     def _add_resource_to_cache(self, resource):
         if self.without_cache:
@@ -81,26 +98,27 @@ class FHIRClient:
                 'Arguments `resource_type` and `id` or `reference` '
                 'are required')
 
-        return FHIRReference(self, reference=reference, **kwargs)
+        return self.reference_class(self, reference=reference, **kwargs)
 
     def resource(self, resource_type=None, **kwargs):
         if resource_type is None:
             raise TypeError('Argument `resource_type` is required')
 
-        return FHIRResource(
+        return self.resource_class(
             self,
             resource_type=resource_type,
             **kwargs
         )
 
     def resources(self, resource_type):
-        return FHIRSearchSet(self, resource_type=resource_type)
+        return self.searchset_class(self, resource_type=resource_type)
 
     def _do_request(self, method, path, data=None, params=None):
         params = params or {}
         params.update({'_format': 'json'})
         url = '{0}/{1}?{2}'.format(
             self.url, path, encode_params(params))
+
         r = requests.request(
             method,
             url,
@@ -111,9 +129,9 @@ class FHIRClient:
             return json.loads(r.content) if r.content else None
 
         if r.status_code == 404:
-            raise FHIRResourceNotFound(r.content.decode())
+            raise ResourceNotFound(r.content.decode())
 
-        raise FHIROperationOutcome(r.content.decode())
+        raise OperationOutcome(r.content.decode())
 
     def _fetch_resource(self, path, params=None):
         return self._do_request('get', path, params=params)
@@ -122,7 +140,7 @@ class FHIRClient:
         return self.schema.get(resource_type, None)
 
 
-class FHIRSearchSet:
+class SearchSet(ABC):
     client = None
     resource_type = None
     params = None
@@ -147,7 +165,7 @@ class FHIRSearchSet:
         bundle_resource_type = bundle_data.get('resourceType', None)
 
         if bundle_resource_type != 'Bundle':
-            raise FHIRInvalidResponse(
+            raise InvalidResponse(
                 'Expected to receive Bundle '
                 'but {0} received'.format(bundle_resource_type))
 
@@ -181,7 +199,7 @@ class FHIRSearchSet:
             '{0}/{1}'.format(self.resource_type, id))
 
         if res_data['resourceType'] != self.resource_type:
-            raise FHIRInvalidResponse(
+            raise InvalidResponse(
                 'Expected to receive {0} '
                 'but {1} received'.format(self.resource_type,
                                           res_data['resourceType']))
@@ -214,7 +232,7 @@ class FHIRSearchSet:
             else:
                 new_params[key].extend(value)
 
-        return FHIRSearchSet(self.client, self.resource_type, new_params)
+        return self.__class__(self.client, self.resource_type, new_params)
 
     def elements(self, *attrs, exclude=False):
         attrs = set(attrs)
@@ -277,8 +295,10 @@ class FHIRSearchSet:
         return self.clone(_sort=sort_keys, override=True)
 
     def __str__(self):  # pragma: no cover
-        return '<FHIRSearchSet {0}?{1}>'.format(
-            self.resource_type, encode_params(self.params))
+        return '<{0} {1}?{2}>'.format(
+            self.__class__.__name__,
+            self.resource_type,
+            encode_params(self.params))
 
     def __repr__(self):  # pragma: no cover
         return self.__str__()
@@ -287,28 +307,28 @@ class FHIRSearchSet:
         return iter(self.fetch())
 
 
-class FHIRBaseResource(dict):
+class AbstractResource(dict):
     client = None
 
     def __init__(self, client, **kwargs):
         self.client = client
 
         self._raise_error_if_invalid_keys(kwargs.keys())
-        super(FHIRBaseResource, self).__init__(**kwargs)
+        super(AbstractResource, self).__init__(**kwargs)
 
     def __eq__(self, other):
-        return isinstance(other, FHIRBaseResource) \
+        return isinstance(other, AbstractResource) \
                and self.reference == other.reference
 
     def __setitem__(self, key, value):
         self._raise_error_if_invalid_key(key)
 
-        super(FHIRBaseResource, self).__setitem__(key, value)
+        super(AbstractResource, self).__setitem__(key, value)
 
     def __getitem__(self, key):
         self._raise_error_if_invalid_key(key)
 
-        return super(FHIRBaseResource, self).__getitem__(key)
+        return super(AbstractResource, self).__getitem__(key)
 
     def get_by_path(self, path, default=None):
         keys = parse_path(path)
@@ -320,18 +340,18 @@ class FHIRBaseResource(dict):
     def get(self, key, default=None):
         self._raise_error_if_invalid_key(key)
 
-        return super(FHIRBaseResource, self).get(key, default)
+        return super(AbstractResource, self).get(key, default)
 
     def setdefault(self, key, default=None):
         self._raise_error_if_invalid_key(key)
 
-        return super(FHIRBaseResource, self).setdefault(key, default)
+        return super(AbstractResource, self).setdefault(key, default)
 
     def serialize(self):
         def convert_fn(item):
-            if isinstance(item, FHIRResource):
+            if isinstance(item, Resource):
                 return item.to_reference().serialize(), True
-            elif isinstance(item, FHIRReference):
+            elif isinstance(item, Reference):
                 return item.serialize(), True
             else:
                 return item, False
@@ -354,14 +374,6 @@ class FHIRBaseResource(dict):
     def reference(self):  # pragma: no cover
         raise NotImplementedError()
 
-    @staticmethod
-    def is_reference(value):
-        if not isinstance(value, dict):
-            return False
-
-        return 'reference' in value and \
-               not (set(value.keys()) - {'reference', 'display'})
-
     def _ipython_key_completions_(self):  # pragma: no cover
         return self.get_root_keys()
 
@@ -378,16 +390,16 @@ class FHIRBaseResource(dict):
         self._raise_error_if_invalid_keys([key])
 
 
-class FHIRResource(FHIRBaseResource):
+class Resource(AbstractResource, ABC):
     resource_type = None
 
     def __init__(self, client, resource_type, **kwargs):
         def convert_fn(item):
-            if isinstance(item, FHIRBaseResource):
+            if isinstance(item, AbstractResource):
                 return item, True
 
-            if FHIRBaseResource.is_reference(item):
-                return FHIRReference(client, **item), True
+            if AbstractResource.is_reference(item):
+                return self.client.reference_class(client, **item), True
 
             return item, False
 
@@ -395,19 +407,19 @@ class FHIRResource(FHIRBaseResource):
         kwargs['resourceType'] = resource_type
         converted_kwargs = convert_values(kwargs, convert_fn)
 
-        super(FHIRResource, self).__init__(client, **converted_kwargs)
+        super(Resource, self).__init__(client, **converted_kwargs)
 
     def __setitem__(self, key, value):
         if key == 'resourceType' and 'resourceType' not in self:
             raise KeyError(
                 'Can not change `resourceType` after instantiating resource. '
                 'You must re-instantiate resource using '
-                '`FHIRClient.resource` method')
+                '`Client.resource` method')
 
-        super(FHIRResource, self).__setitem__(key, value)
+        super(Resource, self).__setitem__(key, value)
 
     def __str__(self):  # pragma: no cover
-        return '<FHIRResource {0}>'.format(self._get_path())
+        return '<{0} {1}>'.format(self.__class__.__name__, self._get_path())
 
     def __repr__(self):  # pragma: no cover
         return self.__str__()
@@ -434,19 +446,23 @@ class FHIRResource(FHIRBaseResource):
 
     def to_resource(self, nocache=False):
         """
-        Returns FHIRResource instance for this resource
+        Returns Resource instance for this resource
         """
         return self
 
     def to_reference(self, **kwargs):
         """
-        Returns FHIRReference instance for this resource
+        Returns Reference instance for this resource
         """
         if not self.reference:
-            raise FHIRResourceNotFound(
+            raise ResourceNotFound(
                 'Can not get reference to unsaved resource without id')
 
-        return FHIRReference(self.client, reference=self.reference, **kwargs)
+        return self.client.reference_class(self.client, reference=self.reference, **kwargs)
+
+    @abstractmethod
+    def is_reference(self, value):
+        pass
 
     @property
     def id(self):
@@ -467,9 +483,9 @@ class FHIRResource(FHIRBaseResource):
         return self.resource_type
 
 
-class FHIRReference(FHIRBaseResource):
+class Reference(AbstractResource):
     def __str__(self):  # pragma: no cover
-        return '<FHIRReference {0}>'.format(self.reference)
+        return '<{0} {1}>'.format(self.__class__.__name__, self.reference)
 
     def __repr__(self):  # pragma: no cover
         return self.__str__()
@@ -479,11 +495,11 @@ class FHIRReference(FHIRBaseResource):
 
     def to_resource(self, nocache=False):
         """
-        Returns FHIRResource instance for this reference from cache
+        Returns Resource instance for this reference from cache
         if nocache is not specified and from fhir server otherwise.
         """
         if not self.is_local:
-            raise FHIRResourceNotFound(
+            raise ResourceNotFound(
                 'Can not resolve not local resource')
 
         cached_resource = self.client._get_resource_from_cache(
@@ -496,32 +512,34 @@ class FHIRReference(FHIRBaseResource):
 
     def to_reference(self, **kwargs):
         """
-        Returns FHIRReference instance for this reference
+        Returns Reference instance for this reference
         """
-        return FHIRReference(self.client, reference=self.reference, **kwargs)
+        return self.__class__(self.client, reference=self.reference, **kwargs)
 
     @property
+    @abstractmethod
     def reference(self):
-        return self['reference']
+        pass
 
     @property
+    @abstractmethod
     def id(self):
         """
         Returns id if reference specifies to the local resource
         """
-        if self.is_local:
-            return self.reference.split('/', 1)[1]
+        pass
 
     @property
+    @abstractmethod
     def resource_type(self):
         """
         Returns resource type if reference specifies to the local resource
         """
-        if self.is_local:
-            return self.reference.split('/', 1)[0]
+        pass
 
     @property
     def is_local(self):
+        # TODO: Should we make this method abstract?
         if self.reference.count('/') != 1:
             return False
 

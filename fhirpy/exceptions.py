@@ -2,21 +2,21 @@ class FHIRError(Exception):
     pass
 
 
-class FHIRResourceNotFound(FHIRError):
+class ResourceNotFound(FHIRError):
     pass
 
 
-class FHIRInvalidResponse(FHIRError):
+class InvalidResponse(FHIRError):
     pass
 
 
-class FHIRAuthorizationError(FHIRError):
+class AuthorizationError(FHIRError):
     pass
 
 
-class FHIROperationOutcome(FHIRError):
+class OperationOutcome(FHIRError):
     pass
 
 
-class FHIRNotSupportedVersionError(FHIRError):
+class NotSupportedVersionError(FHIRError):
     pass
