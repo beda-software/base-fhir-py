@@ -398,7 +398,7 @@ class Resource(AbstractResource, ABC):
             if isinstance(item, AbstractResource):
                 return item, True
 
-            if AbstractResource.is_reference(item):
+            if self.is_reference(item):
                 return self.client.reference_class(client, **item), True
 
             return item, False
