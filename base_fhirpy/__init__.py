@@ -1,4 +1,4 @@
-from .lib import Client
+from .lib import Client, SearchSet, Resource, Reference
 
 __title__ = 'base-fhir-py'
 __version__ = '0.0.1'

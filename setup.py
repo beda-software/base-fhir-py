@@ -15,7 +15,7 @@ def get_version(package):
     return re.search("__version__ = ['\"]([^'\"]+)['\"]", init_py).group(1)
 
 
-version = get_version('fhirpy')
+version = get_version('base_fhirpy')
 
 
 with open('README.md') as f:
@@ -23,7 +23,7 @@ with open('README.md') as f:
 
 
 setup(
-    name='fhirpy',
+    name='base-fhir-py',
     version=version,
     url='http://github.com/beda-software/base-fhir-py',
     license='',
@@ -33,7 +33,7 @@ setup(
     keywords='fhir',
     author='beda.software',
     author_email='fhirpy@beda.software',
-    packages=['basefhirpy'],
+    packages=['base_fhirpy'],
     include_package_data=True,
     install_requires=['requests'],
     zip_safe=False,
