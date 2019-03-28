@@ -377,7 +377,7 @@ class Resource(AbstractResource, ABC):
                 return item, True
 
             if self.is_reference(item):
-                return self.client.reference(**item), True
+                return client.reference(**item), True
 
             return item, False
 
@@ -471,9 +471,6 @@ class Reference(AbstractResource):
     def __repr__(self):  # pragma: no cover
         return self.__str__()
 
-    def get_root_keys(self):
-        return ['reference', 'display']
-
     def to_resource(self, nocache=False):
         """
         Returns Resource instance for this reference from cache
@@ -496,6 +493,10 @@ class Reference(AbstractResource):
         Returns Reference instance for this reference
         """
         return self.client.reference(reference=self.reference, **kwargs)
+
+    @abstractmethod
+    def get_root_keys(self):
+        pass
 
     @property
     @abstractmethod
