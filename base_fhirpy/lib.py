@@ -1,8 +1,6 @@
 import json
 import copy
-import pickle
 from abc import ABC, abstractmethod
-from os.path import dirname
 from collections import defaultdict
 
 import requests
@@ -11,18 +9,7 @@ import requests
 from .utils import (
     encode_params, convert_values, get_by_path, parse_path, chunks)
 from .exceptions import (
-    ResourceNotFound, OperationOutcome, NotSupportedVersionError,
-    InvalidResponse)
-
-
-def load_schema(version):
-    filename = '{0}/schemas/fhir-{1}.pkl'.format(dirname(__file__), version)
-
-    try:
-        with open(filename, 'rb') as f:
-            return pickle.load(f)
-    except FileNotFoundError:
-        raise NotSupportedVersionError()
+    ResourceNotFound, OperationOutcome, InvalidResponse)
 
 
 class Client(ABC):
@@ -32,14 +19,14 @@ class Client(ABC):
     authorization = None
     without_cache = False
 
-    def __init__(self, url, authorization=None, without_cache=False,
-                 fhir_version='3.0.1'):
+    def __init__(self, url, authorization=None, with_cache=False,
+                 schema=None):
         self.url = url
         self.authorization = authorization
         self.resources_cache = defaultdict(dict)
-        self.without_cache = without_cache
-        if fhir_version:
-            self.schema = load_schema(fhir_version)
+        self.without_cache = not with_cache
+        if schema:
+            self.schema = schema
 
     def __str__(self):  # pragma: no cover
         return '<{0} {1}>'.format(self.__class__.__name__, self.url)
@@ -55,11 +42,6 @@ class Client(ABC):
     @property
     @abstractmethod
     def resource_class(self):
-        pass
-
-    @property
-    @abstractmethod
-    def reference_class(self):
         pass
 
     def _add_resource_to_cache(self, resource):
@@ -89,16 +71,9 @@ class Client(ABC):
         else:
             self.resources_cache = defaultdict(dict)
 
+    @abstractmethod
     def reference(self, resource_type=None, id=None, reference=None, **kwargs):
-        if resource_type and id:
-            reference = '{0}/{1}'.format(resource_type, id)
-
-        if not reference:
-            raise TypeError(
-                'Arguments `resource_type` and `id` or `reference` '
-                'are required')
-
-        return self.reference_class(self, reference=reference, **kwargs)
+        pass
 
     def resource(self, resource_type=None, **kwargs):
         if resource_type is None:
@@ -136,8 +111,8 @@ class Client(ABC):
     def _fetch_resource(self, path, params=None):
         return self._do_request('get', path, params=params)
 
-    def _get_schema(self, resource_type):
-        return self.schema.get(resource_type, None)
+    def _get_schema(self):
+        return self.schema
 
 
 class SearchSet(ABC):
@@ -378,6 +353,9 @@ class AbstractResource(dict):
         return self.get_root_keys()
 
     def _raise_error_if_invalid_keys(self, keys):
+        schema = self.client._get_schema()
+        if not schema:
+            return
         root_attrs = self.get_root_keys()
 
         for key in keys:
@@ -399,7 +377,7 @@ class Resource(AbstractResource, ABC):
                 return item, True
 
             if self.is_reference(item):
-                return self.client.reference_class(client, **item), True
+                return self.client.reference(**item), True
 
             return item, False
 
@@ -425,7 +403,10 @@ class Resource(AbstractResource, ABC):
         return self.__str__()
 
     def get_root_keys(self):
-        return set(self.client._get_schema(self.resource_type)) | \
+        schema = self.client._get_schema()
+        if not schema:
+            return set()
+        return set(schema.get(self.resource_type, [])) | \
                {'resourceType', 'id', 'meta', 'extension'}
 
     def save(self):
@@ -458,7 +439,7 @@ class Resource(AbstractResource, ABC):
             raise ResourceNotFound(
                 'Can not get reference to unsaved resource without id')
 
-        return self.client.reference_class(self.client, reference=self.reference, **kwargs)
+        return self.client.reference(reference=self.reference, **kwargs)
 
     @abstractmethod
     def is_reference(self, value):
@@ -514,7 +495,7 @@ class Reference(AbstractResource):
         """
         Returns Reference instance for this reference
         """
-        return self.__class__(self.client, reference=self.reference, **kwargs)
+        return self.client.reference(reference=self.reference, **kwargs)
 
     @property
     @abstractmethod
@@ -538,13 +519,6 @@ class Reference(AbstractResource):
         pass
 
     @property
+    @abstractmethod
     def is_local(self):
-        # TODO: Should we make this method abstract?
-        if self.reference.count('/') != 1:
-            return False
-
-        resource_type, _ = self.reference.split('/')
-        if self.client._get_schema(resource_type):
-            return True
-
-        return False
+        pass
