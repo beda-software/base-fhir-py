@@ -460,6 +460,8 @@ class Resource(AbstractResource, ABC):
     def _get_path(self):
         if self.id:
             return '{0}/{1}'.format(self.resource_type, self.id)
+        elif self.resource_type == 'Bundle':
+            return ''
 
         return self.resource_type
 
